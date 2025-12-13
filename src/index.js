@@ -12,7 +12,7 @@ function corsResponse(data, status = 200) {
     status,
     headers: {
       "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET,HEAD,POST,OPTIONS",
+      "Access-Control-Allow-Methods": "GET,HEAD,POST,DELETE,OPTIONS",
       "Access-Control-Allow-Headers": "*",
       "Content-Type": "application/json"
     }
@@ -24,13 +24,14 @@ export default {
     const url = new URL(request.url);
     const method = request.method;
     const pathname = url.pathname;
+    const secretKey = "DEL-9f2b7d41-a8c3-4c79-9e5a-32f80bf1d4e3";
 
     // ====================== CORS (OPTIONS) ======================
     if (method === "OPTIONS") {
       return new Response(null, {
         headers: {
           "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET,HEAD,POST,OPTIONS",
+          "Access-Control-Allow-Methods": "GET,HEAD,POST,DELETE,OPTIONS",
           "Access-Control-Allow-Headers": "*"
         }
       });
@@ -48,43 +49,61 @@ export default {
     }
 
     // ============================================================
-    //            CREATE CARD ID  (POST /api/cards/create)
+    //            CREATE CARD (POST /api/cards/create)
     // ============================================================
     if (pathname === "/api/cards/create" && method === "POST") {
       const body = await request.json();
       const name = body.name || "Unnamed Card";
+      let cardId = body.cardId; // cardId người dùng nhập
 
-      let cardId;
-
-      // Tạo cardId không trùng
-      while (true) {
-        const tempId = generateCardId();
+      // Nếu người dùng có nhập cardId thì kiểm tra trùng
+      if (cardId) {
         const exists = await env.DB.prepare(
           "SELECT cardId FROM cards WHERE cardId = ?"
         )
-          .bind(tempId)
+          .bind(cardId)
           .first();
 
-        if (!exists) {
-          cardId = tempId;
-          break;
+        if (exists) {
+          return corsResponse({
+            success: false,
+            message: "cardId đã tồn tại, vui lòng chọn cardId khác.",
+          });
+        }
+      } else {
+        // Nếu không nhập → tự tạo cardId không trùng
+        while (true) {
+          const tempId = generateCardId();
+          const exists = await env.DB.prepare(
+            "SELECT cardId FROM cards WHERE cardId = ?"
+          )
+            .bind(tempId)
+            .first();
+
+          if (!exists) {
+            cardId = tempId;
+            break;
+          }
         }
       }
 
+      // Lưu database
       await env.DB.prepare(
         "INSERT INTO cards (cardId, name) VALUES (?, ?)"
-      ).bind(cardId, name).run();
+      )
+        .bind(cardId, name)
+        .run();
 
       return corsResponse({
         success: true,
         cardId,
-        name
+        name,
       });
     }
 
+
     // ============================================================
-    //                 VERIFY CARD ID
-    //           GET /api/cards/verify/:cardId
+    //          VERIFY CARD ID  (GET /api/cards/verify/:cardId)
     // ============================================================
     const verifyMatch = pathname.match(/^\/api\/cards\/verify\/([^\/]+)$/);
     if (verifyMatch && method === "GET") {
@@ -98,13 +117,22 @@ export default {
     }
 
     // ============================================================
-    //          ROUTES LIÊN QUAN ĐẾN CARD (RSVP + MESSAGES)
+    //          ROUTES LIÊN QUAN TỚI CARD (RSVP + MESSAGES)
     // ============================================================
     const match = pathname.match(/^\/api\/cards\/([^\/]+)\/?(.*)?$/);
     if (!match) return corsResponse({ error: "Not Found" }, 404);
 
     const cardId = match[1];
     const subPath = "/" + (match[2] || "");
+
+    // ====================== VERIFY cardId EXISTS ======================
+    const cardExists = await env.DB.prepare(
+      "SELECT 1 FROM cards WHERE cardId = ?"
+    ).bind(cardId).first();
+
+    if (!cardExists) {
+      return corsResponse({ error: "cardId không tồn tại!" }, 404);
+    }
 
     // ====================== RSVP POST ======================
     if (subPath === "/rsvp" && method === "POST") {
@@ -113,11 +141,10 @@ export default {
 
       await env.DB.prepare(
         `INSERT INTO rsvp (cardId, name, phone, isComing, guestCount, guestOf)
-        VALUES (?, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?)`
       )
         .bind(cardId, name, phone, isComing ? 1 : 0, guestCount || 1, guestOf || null)
         .run();
-
 
       return corsResponse({ success: true });
     }
@@ -148,14 +175,24 @@ export default {
     // ====================== MESSAGE GET ======================
     if (subPath === "/messages" && method === "GET") {
       const result = await env.DB.prepare(
-        "SELECT id, name, message, reply, createdAt FROM messages WHERE cardId = ? ORDER BY createdAt DESC"
+        `SELECT id, name, message, reply, createdAt
+          FROM messages
+          WHERE cardId = ?
+          ORDER BY createdAt DESC`
       ).bind(cardId).all();
+
 
       return corsResponse(result.results);
     }
 
-    // DELETE - Xoá toàn bộ comment
+    // ====================== DELETE ALL MESSAGES ======================
     if (subPath === "/messages" && method === "DELETE") {
+      const secret = url.searchParams.get("secret");
+
+      if (secret !== secretKey) {
+        return corsResponse({ error: "Sai mã bảo vệ!" }, 403);
+      }
+
       await env.DB.prepare(
         "DELETE FROM messages WHERE cardId = ?"
       )
@@ -165,8 +202,14 @@ export default {
       return corsResponse({ success: true, message: "Đã xoá tất cả lời chúc." });
     }
 
-    // DELETE - Xoá 1 comment theo id
+    // ====================== DELETE ONE MESSAGE ======================
     if (subPath.startsWith("/messages/") && method === "DELETE") {
+      const secret = url.searchParams.get("secret");
+
+      if (secret !== secretKey) {
+        return corsResponse({ error: "Sai mã bảo vệ!" }, 403);
+      }
+
       const messageId = subPath.split("/")[2];
 
       await env.DB.prepare(
