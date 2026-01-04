@@ -12,7 +12,7 @@ function corsResponse(data, status = 200) {
     status,
     headers: {
       "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET,HEAD,POST,DELETE,OPTIONS",
+      "Access-Control-Allow-Methods": "GET,HEAD,POST,DELETE,OPTIONS,PATCH",
       "Access-Control-Allow-Headers": "*",
       "Content-Type": "application/json"
     }
