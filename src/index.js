@@ -172,10 +172,46 @@ export default {
       return corsResponse({ success: true });
     }
 
+    // ====================== MESSAGE LIKE / UNLIKE ======================
+    if (
+      subPath.match(/^\/messages\/\d+\/like$/) &&
+      method === "PATCH"
+    ) {
+      const messageId = subPath.split("/")[2];
+
+      // Lấy trạng thái hiện tại
+      const current = await env.DB.prepare(
+        "SELECT isLike FROM messages WHERE id = ? AND cardId = ?"
+      )
+        .bind(messageId, cardId)
+        .first();
+
+      if (!current) {
+        return corsResponse(
+          { error: "Message not found" },
+          404
+        );
+      }
+
+      const newLike = current.isLike === 1 ? 0 : 1;
+
+      await env.DB.prepare(
+        "UPDATE messages SET isLike = ? WHERE id = ? AND cardId = ?"
+      )
+        .bind(newLike, messageId, cardId)
+        .run();
+
+      return corsResponse({
+        success: true,
+        isLike: newLike,
+      });
+    }
+
+
     // ====================== MESSAGE GET ======================
     if (subPath === "/messages" && method === "GET") {
       const result = await env.DB.prepare(
-        `SELECT id, name, message, reply, createdAt
+        `SELECT id, name, message, reply, createdAt, isLike
           FROM messages
           WHERE cardId = ?
           ORDER BY createdAt DESC`
